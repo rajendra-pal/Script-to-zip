@@ -1,3 +1,10 @@
 __pycache__/
+*.pyc
 output_images/
-video_project.zip
+*.zip
+.env
+instance/
+
+
+# temp dirs created by app
+script_to_zip_*
