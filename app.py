@@ -1,58 +1,78 @@
-from flask import Flask, request, send_file, render_template_string
-import os, zipfile, requests
+from flask import Flask, request, send_file, render_template_string, abort
+except Exception as e:
+err_path = os.path.join(tmpdir, f"scene_{i:03d}_exception.txt")
+with open(err_path, 'w', encoding='utf-8') as ef:
+ef.write(f"Exception while fetching prompt: {safe_line}\n{repr(e)}")
+image_paths.append(err_path)
 
-app = Flask(__name__)
 
-HTML_FORM = """
-<!doctype html>
-<html>
-<head><title>Script to Zip</title></head>
-<body>
-    <h1>Script to Images → ZIP</h1>
-    <form method="post">
-        <textarea name="script" rows="10" cols="60" placeholder="Paste your script here..."></textarea><br><br>
-        <button type="submit">Generate ZIP</button>
-    </form>
-</body>
-</html>
-"""
+return image_paths
 
-def generate_images_from_script(script, output_zip="video_project.zip"):
-    os.makedirs("output_images", exist_ok=True)
-    for f in os.listdir("output_images"):
-        os.remove(os.path.join("output_images", f))
 
-    lines = [line.strip() for line in script.split("\n") if line.strip()]
-    image_files = []
 
-    for i, line in enumerate(lines, start=1):
-        url = f"https://image.pollinations.ai/prompt/{line.replace(' ', '%20')}"
-        image_path = f"output_images/scene_{i}.png"
-        r = requests.get(url)
-        if r.status_code == 200:
-            with open(image_path, "wb") as f:
-                f.write(r.content)
-            image_files.append(image_path)
 
-    script_file = "output_images/script.txt"
-    with open(script_file, "w", encoding="utf-8") as f:
-        f.write(script)
-
-    with zipfile.ZipFile(output_zip, "w") as zipf:
-        for file in image_files + [script_file]:
-            zipf.write(file)
-
-    return output_zip
-
-@app.route("/", methods=["GET", "POST"])
+@app.route('/', methods=['GET'])
 def index():
-    if request.method == "POST":
-        script = request.form["script"]
-        zip_path = generate_images_from_script(script)
-        return send_file(zip_path, as_attachment=True)
-    return render_template_string(HTML_FORM)
+return render_template_string(HTML_FORM)
 
-if __name__ == "__main__":
-    # important for Render/Heroku
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+
+
+
+@app.route('/generate', methods=['POST'])
+def generate():
+script = request.form.get('script', '')
+if not script.strip():
+abort(400, 'No script provided')
+
+
+try:
+max_lines = int(request.form.get('max_lines', 20))
+except Exception:
+max_lines = 20
+max_lines = max(1, min(50, max_lines))
+
+
+# split lines and keep only non-empty
+lines = [ln.strip() for ln in script.split('\n') if ln.strip()]
+lines = lines[:max_lines]
+
+
+# Use a temp directory per request to avoid collisions
+workdir = tempfile.mkdtemp(prefix='script_to_zip_')
+try:
+# save script file
+script_file = os.path.join(workdir, 'script.txt')
+with open(script_file, 'w', encoding='utf-8') as sf:
+sf.write(script)
+
+
+# generate images
+image_files = generate_images_lines(lines, workdir)
+
+
+# create zip file
+zip_name = f"video_project_{uuid.uuid4().hex[:8]}.zip"
+zip_path = os.path.join(workdir, zip_name)
+with zipfile.ZipFile(zip_path, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
+# add images and script with nicer names
+for p in sorted(image_files):
+arcname = os.path.basename(p)
+zf.write(p, arcname)
+zf.write(script_file, 'script.txt')
+
+
+# send file
+return send_file(zip_path, as_attachment=True, download_name=zip_name)
+
+
+finally:
+# cleanup: remove the temp directory after request finishes sending
+# Note: send_file reads file before returning, so it's safe to cleanup here.
+shutil.rmtree(workdir, ignore_errors=True)
+
+
+
+
+if __name__ == '__main__':
+port = int(os.environ.get('PORT', 5000))
+app.run(host='0.0.0.0', port=port)
